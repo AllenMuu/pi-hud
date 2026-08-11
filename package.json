@@ -1,0 +1,15 @@
+{
+  "name": "pi-hud",
+  "version": "0.1.0",
+  "description": "Real-time status HUD for the pi agent. Replaces pi's native footer with context usage, tool activity, session state, and more.",
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extension/index.ts"]
+  },
+  "keywords": ["pi", "pi-agent", "hud", "statusline", "footer", "monitoring"],
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "typescript": "^5.4.5"
+  }
+}
