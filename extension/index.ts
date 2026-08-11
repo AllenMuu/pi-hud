@@ -3,7 +3,7 @@
 // the pi ExtensionAPI and wires up event subscriptions, command registration, and footer rendering.
 
 import { loadConfig, saveConfig } from "./config.js";
-import { createInitialState, addTool, updateToolStatus, recordSkill, extractToolTarget, type HudState } from "./state.js";
+import { createInitialState, addTool, updateToolStatus, recordSkill, extractToolTarget, type HudState, type GitState } from "./state.js";
 import { createGitSource } from "./sources/git.js";
 import { readModelInfo, readContextUsage, readAssistantUsage } from "./sources/context.js";
 import { readSessionInfo, readSessionNameFromEvent } from "./sources/session.js";
@@ -31,35 +31,61 @@ export default function piHudExtension(pi: AnyPi) {
 
     let renderTimer: ReturnType<typeof setTimeout> | null = null;
     let lastRenderedLines: string[] = [];
+    // Most-recent ctx captured from an event handler. The render timer
+    // coalesces event bursts and always re-snapshots from this ctx so it
+    // never renders against a stale closure-captured ctx.
+    let lastCtx: AnyCtx | undefined;
 
-    // --- Render + footer update ------------------------------------------
-
-    async function refreshFooter(ctx?: AnyCtx): Promise<void> {
+    function debugLog(...args: unknown[]): void {
       try {
-        // No-op in non-TUI modes (pi doesn't have a visible footer there)
-        if (ctx && typeof ctx.hasUI === "boolean" && !ctx.hasUI) return;
-        const ui = ctx?.ui ?? pi?.ui;
-        if (!ui || typeof ui.setFooter !== "function") return;
+        if (process?.env?.PI_HUD_DEBUG === "1") {
+          // eslint-disable-next-line no-console
+          console.error("[pi-hud]", ...args);
+        }
+      } catch {
+        // best-effort
+      }
+    }
 
-        // Snapshot current model + context (these are live reads from ctx)
-        if (ctx) {
-          const model = readModelInfo(ctx);
-          if (model.modelId) state.modelId = model.modelId;
-          if (model.modelName) state.modelName = model.modelName;
-          if (model.providerId) state.providerId = model.providerId;
-          if (model.thinkingLevel) state.thinkingLevel = model.thinkingLevel;
-          if (model.contextWindow) state.contextWindow = model.contextWindow;
-
-          const usage = readContextUsage(ctx);
-          if (usage.tokensUsed !== undefined) state.contextTokensUsed = usage.tokensUsed;
-          if (usage.windowSize !== undefined && !state.contextWindow) state.contextWindow = usage.windowSize;
+    // Sync snapshot of model + context usage from a fresh ctx into in-memory state.
+    function snapshotFromCtx(ctx: AnyCtx): void {
+      try {
+        // Stale ctx throws on property access — bail silently if so.
+        try {
+          void ctx?.model;
+        } catch {
+          return;
         }
 
-        // Read git status (throttled)
-        const cwd = state.cwd || process.cwd();
-        const git = await gitSource.get(cwd);
+        const model = readModelInfo(ctx);
+        if (model.modelId) state.modelId = model.modelId;
+        if (model.modelName) state.modelName = model.modelName;
+        if (model.providerId) state.providerId = model.providerId;
+        if (model.thinkingLevel) state.thinkingLevel = model.thinkingLevel;
+        if (model.contextWindow) state.contextWindow = model.contextWindow;
+        const usage = readContextUsage(ctx);
+        if (usage.tokensUsed !== undefined) state.contextTokensUsed = usage.tokensUsed;
+        if (usage.windowSize !== undefined && !state.contextWindow) state.contextWindow = usage.windowSize;
+      } catch (err) {
+        debugLog("snapshotFromCtx error:", err);
+      }
+    }
 
-        // Render
+    // Synchronous render using cached git state. Safe to call from event handlers.
+    function renderNow(ctx: AnyCtx, git?: GitState): void {
+      try {
+        // No-op in non-TUI modes (pi has no visible footer there).
+        // ctx.hasUI is a getter that throws if ctx is stale — bail if so.
+        let hasUI: boolean | undefined;
+        try {
+          hasUI = ctx?.hasUI;
+        } catch {
+          return;
+        }
+        if (hasUI === false) return;
+        const ui = ctx?.ui;
+        if (!ui || typeof ui.setFooter !== "function") return;
+
         const width = (typeof process?.stdout?.columns === "number" && process.stdout.columns > 0)
           ? Math.max(20, process.stdout.columns - 4)
           : 120;
@@ -75,28 +101,35 @@ export default function piHudExtension(pi: AnyPi) {
           render: (_w: number) => lines,
         });
       } catch (err) {
-        // Silent: never crash pi over a render failure
+        // Stale ctx, missing ui, or pi is shutting down — never crash
+        debugLog("renderNow error:", err);
+      }
+    }
+
+    // Async refresh that also refreshes git status, then re-renders.
+    // Called from event handlers; ctx must be fresh at the time of the call.
+    async function refreshFooter(ctx: AnyCtx): Promise<void> {
+      try {
+        const cwd = state.cwd || process.cwd();
+        const git = await gitSource.get(cwd);
+        // Snapshot after await in case ctx model fields changed while awaiting git
+        snapshotFromCtx(ctx);
+        renderNow(ctx, git);
+      } catch (err) {
         debugLog("refreshFooter error:", err);
       }
     }
 
-    function scheduleRefresh(ctx?: AnyCtx): void {
+    // Coalesce a burst of events into one render. ctx must be fresh when scheduled.
+    function scheduleRefresh(ctx: AnyCtx): void {
+      lastCtx = ctx;
       if (renderTimer) clearTimeout(renderTimer);
       renderTimer = setTimeout(() => {
         renderTimer = null;
-        void refreshFooter(ctx);
+        const ctx = lastCtx;
+        lastCtx = undefined;
+        if (ctx) void refreshFooter(ctx);
       }, RENDER_DEBOUNCE_MS);
-    }
-
-    function debugLog(...args: unknown[]): void {
-      try {
-        if (process?.env?.PI_HUD_DEBUG === "1") {
-          // eslint-disable-next-line no-console
-          console.error("[pi-hud]", ...args);
-        }
-      } catch {
-        // best-effort
-      }
     }
 
     // --- Event subscriptions ---------------------------------------------
@@ -104,6 +137,8 @@ export default function piHudExtension(pi: AnyPi) {
     // session_start: capture cwd, session start time, session name. Then initial render.
     pi.on("session_start", (event: AnyEvent, ctx: AnyCtx) => {
       try {
+        if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+        lastCtx = undefined;
         state = createInitialState(); // fresh state per session
         state.cwd = ctx?.cwd || process.cwd();
         const info = readSessionInfo(ctx);
@@ -249,6 +284,8 @@ export default function piHudExtension(pi: AnyPi) {
     // session_shutdown: clear footer so we don't leak state into the next session before reload
     pi.on("session_shutdown", (_event: AnyEvent, ctx: AnyCtx) => {
       try {
+        if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+        lastCtx = undefined;
         const ui = ctx?.ui ?? pi?.ui;
         if (ui && typeof ui.setFooter === "function") {
           ui.setFooter(undefined);
