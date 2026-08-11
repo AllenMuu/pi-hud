@@ -1,0 +1,15 @@
+#!/bin/sh
+# Auto-attribute commits made through the pi agent.
+#
+# pi injects PI_SESSION_ID (and PI_SESSION_FILE / PI_MODEL / ...) into every
+# command it spawns. When that env var is present, the commit originated from
+# a pi agent run, so append a Co-Authored-By trailer. Manual commits made in a
+# normal shell (no PI_SESSION_ID) are left untouched.
+#
+# Idempotent: skips when the trailer is already present (e.g. after --amend,
+# which does not fire this hook, so the agent adds it explicitly there).
+msg="$1"
+marker="Co-Authored-By: pi <noreply@pi.dev>"
+if [ -n "$PI_SESSION_ID" ] && ! grep -qF "$marker" "$msg"; then
+  printf '\n%s\n' "$marker" >> "$msg"
+fi

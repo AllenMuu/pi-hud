@@ -35,8 +35,8 @@ extension/
     session.ts      # readSessionInfo — reads ctx.sessionManager for session start + name + leaf id
   render/
     index.ts        # render({state,cfg,git,width}) -> string[]  (picks expanded|compact)
-    expanded.ts     # 2-line layout
-    compact.ts      # 1-line layout
+    expanded.ts     # 5-line claude-hud-style layout
+    compact.ts      # 2-line layout
     elements.ts     # per-element renderers (model, project+git, context, tokens, tools, ...)
     ansi.ts         # colorize / joinSegments / SYMBOLS / contextColor
   utils/
@@ -77,3 +77,18 @@ docs/adr/           # 3 ADRs — read before architectural changes (see below)
 - Pure functions in `utils/` and `render/` take plain inputs and return strings — no `ctx`, no side effects. Keep pi-coupled code in `sources/` and `index.ts` only.
 - Colors accept named presets (`red`, `brightBlue`, …), 256-color numbers (`208`), or hex (`#FF6600`) — resolved in `render/ansi.ts`.
 - `language: "en"` is reserved in config; v1 is English-only.
+
+## Commits
+
+Commits made through the pi agent are auto-attributed by a `prepare-commit-msg`
+hook (`.githooks/prepare-commit-msg`, enabled via `git config core.hooksPath
+.githooks`). The hook detects pi-injected `PI_SESSION_ID` and appends a
+`Co-Authored-By: pi <noreply@pi.dev>` trailer; manual commits in a normal shell
+(no `PI_SESSION_ID`) are unaffected. It is idempotent (skips if the trailer is
+already present).
+
+- Normal `git commit` (incl. `-m`/`-F`): the hook adds the trailer - do not add
+  it by hand (harmless if you do; the hook skips).
+- `git commit --amend`: the hook does **not** fire, so add the trailer
+  explicitly: `git commit --amend --no-edit --trailer "Co-Authored-By: pi <noreply@pi.dev>"`.
+- After a fresh clone, enable the hook: `git config core.hooksPath .githooks`.
