@@ -34,6 +34,7 @@ export interface HudConfig {
     showCompactions: boolean;
     showSessionName: boolean;
     showSkills: boolean;
+    showContextResources: boolean;
   };
   colors: {
     model: string;
@@ -48,6 +49,7 @@ export interface HudConfig {
     label: string;
     barFilled: string;
     barEmpty: string;
+    contextResources: string;
   };
   thresholds: {
     contextWarning: number; // percent
@@ -91,6 +93,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showCompactions: true,
     showSessionName: true,
     showSkills: true,
+    showContextResources: true,
   },
   colors: {
     model: "cyan",
@@ -105,6 +108,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     label: "dim",
     barFilled: "█",
     barEmpty: "░",
+    contextResources: "dim",
   },
   thresholds: {
     contextWarning: 70,

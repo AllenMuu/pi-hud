@@ -65,6 +65,12 @@ export interface HudState {
   // Active skills (names of skills whose SKILL.md was read this session)
   skills: Set<string>;
 
+  // Context resources captured from before_agent_start's systemPromptOptions.
+  // Paths only - file contents are sensitive and not needed for display.
+  contextFilePaths?: string[];   // loaded AGENTS.md / CLAUDE.md / context files
+  loadedSkillsCount?: number;    // all skills loaded into the system prompt
+  selectedToolsCount?: number;   // tools available to the model this turn
+
   // Working directory (captured at session_start)
   cwd?: string;
 }

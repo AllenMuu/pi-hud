@@ -73,6 +73,7 @@ const TOGGLE_KEYS: Array<[`show${string}`, string]> = [
   ["showCompactions", "Compaction count"],
   ["showSessionName", "Session name / branch"],
   ["showSkills", "Active skills"],
+  ["showContextResources", "Context resources (ctx/skills/tools counts)"],
 ];
 
 // Interactive flip menu: select a toggle to flip it, or "Done" to finish.

@@ -83,44 +83,57 @@ export function renderTokens(state: HudState, cfg: HudConfig): string | undefine
   return joinSegments(parts, " ");
 }
 
-// (5) Tool activity: ◐ Edit: auth.ts | ✓ Read ×3
+// (5) Tool activity: ◐ Edit: auth.ts | ✓ Bash ×15 | ✓ Write ×2 | +1 more
+// Running + error tools get full detail (with target); completed tools are
+// summarized as "✓ Name ×N" deduped by name, capped at toolsMaxVisible with a
+// trailing "+N more". Mirrors claude-hud's tool summary line.
 export function renderTools(state: HudState, cfg: HudConfig): string | undefined {
   if (!cfg.display.showTools || state.tools.length === 0) return undefined;
   const max = cfg.display.toolsMaxVisible;
-  const visible = state.tools.slice(-max);
-  // Group: running tools shown first (with ◐), completed ones deduped by name
   const segments: string[] = [];
-  const completedCountByName = new Map<string, number>();
 
-  // First: running tools (most recent first within running)
-  const running = visible.filter((t) => t.status === "running").reverse();
-  for (const t of running) {
+  // Running then error tools: show individually with target (rare, actionable).
+  // Running is "now"; errors need attention but are already done.
+  const running = state.tools.filter((t) => t.status === "running").reverse();
+  const errored = state.tools.filter((t) => t.status === "error").reverse();
+  for (const t of [...running, ...errored]) {
     segments.push(renderToolEntry(t, cfg));
   }
 
-  // Then: completed tools, deduped by name with count
-  const completed = visible.filter((t) => t.status !== "running");
-  for (const t of completed) {
-    const key = t.name + (t.target ? ":" + t.target : "");
-    completedCountByName.set(key, (completedCountByName.get(key) || 0) + 1);
+  // Completed tools: dedup by name, count occurrences, most-used first.
+  // Array.sort is stable, so newest-first (from the reverse iteration) is the
+  // tiebreaker for tools with equal counts.
+  const completed = state.tools.filter((t) => t.status === "completed");
+  const counts = new Map<string, number>();
+  const order: string[] = [];
+  for (let i = completed.length - 1; i >= 0; i--) {
+    const name = completed[i].name;
+    if (counts.has(name)) {
+      counts.set(name, (counts.get(name) || 0) + 1);
+    } else {
+      counts.set(name, 1);
+      order.push(name);
+    }
   }
-  // Render deduped completed entries, newest key last
-  const seenKeys = new Set<string>();
-  for (let i = completed.length - 1; i >= 0 && seenKeys.size < max - running.length; i--) {
-    const t = completed[i];
-    const key = t.name + (t.target ? ":" + t.target : "");
-    if (seenKeys.has(key)) continue;
-    seenKeys.add(key);
-    const count = completedCountByName.get(key) || 1;
-    segments.push(renderToolEntry(t, cfg, count > 1 ? count : undefined));
+  order.sort((a, b) => (counts.get(b) || 0) - (counts.get(a) || 0));
+
+  const shown = order.slice(0, max);
+  const hidden = order.length - shown.length;
+  for (const name of shown) {
+    const count = counts.get(name) || 1;
+    const label = capitalize(name) + (count > 1 ? " ×" + count : "");
+    segments.push(colorize("green", SYMBOLS.completed + " " + label));
+  }
+  if (hidden > 0) {
+    segments.push(colorize(cfg.colors.label, "+" + hidden + " more"));
   }
 
-  return joinSegments(segments, " | ") || undefined;
+  return segments.length > 0 ? segments.join(" | ") : undefined;
 }
 
 function renderToolEntry(t: ToolEntry, cfg: HudConfig, count?: number): string {
   const glyph = t.status === "running" ? SYMBOLS.running : t.status === "error" ? SYMBOLS.error : SYMBOLS.completed;
-  const color = t.status === "running" ? "yellow" : t.status === "error" ? "red" : cfg.colors.label;
+  const color = t.status === "running" ? "yellow" : t.status === "error" ? "red" : "green";
   let label = t.name;
   if (t.target) {
     label += ": " + truncate(t.target, cfg.display.toolNameMaxLength);
@@ -129,6 +142,11 @@ function renderToolEntry(t: ToolEntry, cfg: HudConfig, count?: number): string {
     label += " ×" + count;
   }
   return colorize(color, glyph + " " + label);
+}
+
+// Capitalize the first letter of a tool name for display: "bash" -> "Bash".
+function capitalize(name: string): string {
+  return name.length > 0 ? name[0].toUpperCase() + name.slice(1) : name;
 }
 
 // (6) Session duration: ⏱ 5m
@@ -157,6 +175,25 @@ export function renderSkills(state: HudState, cfg: HudConfig): string | undefine
   if (!cfg.display.showSkills || state.skills.size === 0) return undefined;
   const names = Array.from(state.skills).slice(-5);
   return colorize(cfg.colors.tokens, SYMBOLS.skill + " " + names.join(", "));
+}
+
+// (10) Context resources: 2 ctx | 6 skills | 4 tools
+// Counts of context files / loaded skills / selected tools captured from
+// before_agent_start. Hidden until the first prompt populates the fields.
+export function renderContextResources(state: HudState, cfg: HudConfig): string | undefined {
+  if (!cfg.display.showContextResources) return undefined;
+  const parts: string[] = [];
+  if (state.contextFilePaths !== undefined) {
+    parts.push(`${state.contextFilePaths.length} ctx`);
+  }
+  if (state.loadedSkillsCount !== undefined) {
+    parts.push(`${state.loadedSkillsCount} skills`);
+  }
+  if (state.selectedToolsCount !== undefined) {
+    parts.push(`${state.selectedToolsCount} tools`);
+  }
+  if (parts.length === 0) return undefined;
+  return colorize(cfg.colors.contextResources, parts.join(" | "));
 }
 
 // Compact-mode helpers: shorter versions of the above.

@@ -119,3 +119,38 @@ export function readAssistantUsage(message: AnyCtx): UsageData | undefined {
     return undefined;
   }
 }
+
+// Probe a before_agent_start event's systemPromptOptions for loaded context
+// resources: context files (AGENTS.md / CLAUDE.md / etc.), skills, and tools.
+// Returns paths/counts only - never content (which is sensitive). Each field
+// is left undefined when the shape isn't recognized, so the renderer hides it.
+export interface ContextResources {
+  contextFilePaths?: string[];
+  loadedSkillsCount?: number;
+  selectedToolsCount?: number;
+}
+
+export function readContextResources(opts: AnyCtx): ContextResources {
+  const out: ContextResources = {};
+  try {
+    if (!opts || typeof opts !== "object") return out;
+
+    const files = opts.contextFiles;
+    if (Array.isArray(files)) {
+      out.contextFilePaths = files
+        .map((f: AnyCtx) =>
+          f && typeof f === "object" && typeof f.path === "string" ? f.path : undefined,
+        )
+        .filter((p: unknown): p is string => typeof p === "string");
+    }
+
+    const skills = opts.skills;
+    if (Array.isArray(skills)) out.loadedSkillsCount = skills.length;
+
+    const tools = opts.selectedTools;
+    if (Array.isArray(tools)) out.selectedToolsCount = tools.length;
+  } catch {
+    // best-effort
+  }
+  return out;
+}

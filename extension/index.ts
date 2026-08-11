@@ -5,7 +5,7 @@
 import { loadConfig, saveConfig } from "./config.js";
 import { createInitialState, addTool, updateToolStatus, recordSkill, extractToolTarget, type HudState, type GitState } from "./state.js";
 import { createGitSource } from "./sources/git.js";
-import { readModelInfo, readContextUsage, readAssistantUsage } from "./sources/context.js";
+import { readModelInfo, readContextUsage, readAssistantUsage, readContextResources } from "./sources/context.js";
 import { readSessionInfo, readSessionNameFromEvent } from "./sources/session.js";
 import { render } from "./render/index.js";
 import { runConfigure, ctxToDeps, ConfigureAborted } from "./commands/configure.js";
@@ -30,7 +30,6 @@ export default function piHudExtension(pi: AnyPi) {
     );
 
     let renderTimer: ReturnType<typeof setTimeout> | null = null;
-    let lastRenderedLines: string[] = [];
     // Most-recent ctx captured from an event handler. The render timer
     // coalesces event bursts and always re-snapshots from this ctx so it
     // never renders against a stale closure-captured ctx.
@@ -86,20 +85,13 @@ export default function piHudExtension(pi: AnyPi) {
         const ui = ctx?.ui;
         if (!ui || typeof ui.setFooter !== "function") return;
 
-        const width = (typeof process?.stdout?.columns === "number" && process.stdout.columns > 0)
-          ? Math.max(20, process.stdout.columns - 4)
-          : 120;
-        const lines = render({ state, cfg, git, width });
-
-        // Avoid redundant writes if nothing changed
-        if (lines.join("\n") === lastRenderedLines.join("\n")) return;
-        lastRenderedLines = lines;
-
-        // pi's setFooter accepts either a string[], or a component with a render(width) method.
-        // We pass a lightweight component so pi can re-render on width changes.
-        ui.setFooter({
-          render: (_w: number) => lines,
-        });
+        // pi's setFooter expects a factory (tui, theme, footerData) => Component, where
+        // Component is { render(width): string[] }. We defer line rendering to render(width)
+        // so the footer uses pi's actual footer width and adapts to terminal resizes.
+        // state/cfg are read live from the closure; git is captured per refresh.
+        ui.setFooter(() => ({
+          render: (w: number) => render({ state, cfg, git, width: Math.max(20, w) }),
+        }));
       } catch (err) {
         // Stale ctx, missing ui, or pi is shutting down — never crash
         debugLog("renderNow error:", err);
@@ -184,6 +176,22 @@ export default function piHudExtension(pi: AnyPi) {
         scheduleRefresh(ctx);
       } catch (err) {
         debugLog("thinking_level_select error:", err);
+      }
+    });
+
+    // before_agent_start: capture loaded context resources (context files,
+    // skills, tools) from the structured systemPromptOptions. Fires before each
+    // agent run - the earliest reliable source, since ctx.getSystemPromptOptions()
+    // is only available in command context, not event handlers.
+    pi.on("before_agent_start", (event: AnyEvent, ctx: AnyCtx) => {
+      try {
+        const res = readContextResources(event?.systemPromptOptions);
+        if (res.contextFilePaths !== undefined) state.contextFilePaths = res.contextFilePaths;
+        if (res.loadedSkillsCount !== undefined) state.loadedSkillsCount = res.loadedSkillsCount;
+        if (res.selectedToolsCount !== undefined) state.selectedToolsCount = res.selectedToolsCount;
+        scheduleRefresh(ctx);
+      } catch (err) {
+        debugLog("before_agent_start error:", err);
       }
     });
 
@@ -298,7 +306,7 @@ export default function piHudExtension(pi: AnyPi) {
     // --- Slash command: /pi-hud:configure --------------------------------
 
     if (typeof pi.registerCommand === "function") {
-      pi.registerCommand("configure", {
+      pi.registerCommand("pi-hud:configure", {
         description: "Configure pi-hud display options",
         handler: async (_args: unknown, ctx: AnyCtx) => {
           const deps = ctxToDeps(ctx);
@@ -323,7 +331,6 @@ export default function piHudExtension(pi: AnyPi) {
             }
           }
           // Force an immediate re-render with current config
-          lastRenderedLines = [];
           await refreshFooter(ctx);
         },
       });
