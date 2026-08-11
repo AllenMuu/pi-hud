@@ -8,7 +8,7 @@ import { createGitSource } from "./sources/git.js";
 import { readModelInfo, readContextUsage, readAssistantUsage } from "./sources/context.js";
 import { readSessionInfo, readSessionNameFromEvent } from "./sources/session.js";
 import { render } from "./render/index.js";
-import { runConfigure, ctxToDeps } from "./commands/configure.js";
+import { runConfigure, ctxToDeps, ConfigureAborted } from "./commands/configure.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyPi = any;
@@ -301,10 +301,28 @@ export default function piHudExtension(pi: AnyPi) {
       pi.registerCommand("configure", {
         description: "Configure pi-hud display options",
         handler: async (_args: unknown, ctx: AnyCtx) => {
-          cfg = loadConfig(); // re-read in case the user edited the file
           const deps = ctxToDeps(ctx);
-          cfg = await runConfigure(cfg, deps);
-          // Force an immediate re-render with new config
+          try {
+            cfg = loadConfig(); // re-read in case the user edited the file
+            cfg = await runConfigure(cfg, deps);
+          } catch (err) {
+            // User pressed ESC on a select prompt: abort, discard partial
+            // mutations, and re-render with the prior config. Never hang.
+            if (err instanceof ConfigureAborted || (err instanceof Error && err.name === "ConfigureAborted")) {
+              deps.notify("pi-hud configuration cancelled", "info");
+              cfg = loadConfig();
+            } else {
+              // A non-abort error (e.g. saveConfig disk failure) leaves cfg
+              // partially mutated in memory. Reload from disk so the in-memory
+              // config always reflects what was actually persisted, and tell
+              // the user the configure failed - debugLog alone is invisible
+              // without PI_HUD_DEBUG=1.
+              debugLog("configure error:", err);
+              deps.notify("pi-hud configuration failed", "error");
+              cfg = loadConfig();
+            }
+          }
+          // Force an immediate re-render with current config
           lastRenderedLines = [];
           await refreshFooter(ctx);
         },
