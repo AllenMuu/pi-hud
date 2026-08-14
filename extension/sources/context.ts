@@ -58,14 +58,23 @@ export function readModelInfo(ctx: AnyCtx): ModelInfo {
 }
 
 // Probe ctx.getContextUsage() for current token usage.
-export function readContextUsage(ctx: AnyCtx): ContextUsage {
+// Returns a Promise so callers can await it: ctx.getContextUsage() may be
+// either sync or async depending on pi version; we normalize to async.
+export async function readContextUsage(ctx: AnyCtx): Promise<ContextUsage> {
   const out: ContextUsage = {};
   try {
     const fn = ctx?.getContextUsage;
     if (typeof fn !== "function") return out;
     const result = fn.call(ctx);
-    // May be a Promise or a sync object; normalize to sync if possible
-    const sync = result && typeof result.then === "function" ? undefined : result;
+    // ctx.getContextUsage() may be sync or async — await handles both.
+    let sync: Record<string, unknown> | undefined = result;
+    if (result && typeof result.then === "function") {
+      try {
+        sync = await result;
+      } catch {
+        return out;
+      }
+    }
     if (sync && typeof sync === "object") {
       out.tokensUsed =
         typeof sync.tokens === "number" ? sync.tokens :

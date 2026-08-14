@@ -86,7 +86,7 @@ export function createInitialState(): HudState {
 
 // Try to extract a "target" string from a tool's arguments (file_path, pattern, command, etc.)
 // Best-effort: returns undefined if nothing useful is found.
-export function extractToolTarget(name: string, args: Record<string, unknown> | undefined): string | undefined {
+export function extractToolTarget(args: Record<string, unknown> | undefined): string | undefined {
   if (!args || typeof args !== "object") return undefined;
   const candidates = [
     "file_path",

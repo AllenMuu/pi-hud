@@ -81,12 +81,4 @@ export function contextColor(percent: number | undefined, warning: number, criti
   return base;
 }
 
-// Pick a color for a usage percentage (similar logic but different default).
-export function usageColor(percent: number | undefined, warning: number, base: string): string {
-  if (percent === undefined) return base;
-  if (percent >= 95) return "red";
-  if (percent >= warning) return "brightMagenta";
-  return base;
-}
-
 export { RESET };

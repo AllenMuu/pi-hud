@@ -83,23 +83,3 @@ export function truncateToWidth(s: string, max: number): string {
   }
   return out + "…";
 }
-
-// Wrap a string to a max width, breaking on spaces. Returns lines.
-export function wrapToWidth(s: string, max: number): string[] {
-  if (max <= 0) return [""];
-  const words = s.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return [""];
-  const lines: string[] = [];
-  let cur = "";
-  for (const word of words) {
-    const candidate = cur ? cur + " " + word : word;
-    if (visibleWidth(candidate) <= max) {
-      cur = candidate;
-    } else {
-      if (cur) lines.push(cur);
-      cur = word;
-    }
-  }
-  if (cur) lines.push(cur);
-  return lines;
-}

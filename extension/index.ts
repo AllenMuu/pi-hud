@@ -46,8 +46,9 @@ export default function piHudExtension(pi: AnyPi) {
       }
     }
 
-    // Sync snapshot of model + context usage from a fresh ctx into in-memory state.
-    function snapshotFromCtx(ctx: AnyCtx): void {
+    // Snapshot of model + context usage from a fresh ctx into in-memory state.
+    // Async because ctx.getContextUsage() may return a Promise; callers must await.
+    async function snapshotFromCtx(ctx: AnyCtx): Promise<void> {
       try {
         // Stale ctx throws on property access — bail silently if so.
         try {
@@ -62,7 +63,7 @@ export default function piHudExtension(pi: AnyPi) {
         if (model.providerId) state.providerId = model.providerId;
         if (model.thinkingLevel) state.thinkingLevel = model.thinkingLevel;
         if (model.contextWindow) state.contextWindow = model.contextWindow;
-        const usage = readContextUsage(ctx);
+        const usage = await readContextUsage(ctx);
         if (usage.tokensUsed !== undefined) state.contextTokensUsed = usage.tokensUsed;
         if (usage.windowSize !== undefined && !state.contextWindow) state.contextWindow = usage.windowSize;
       } catch (err) {
@@ -105,7 +106,7 @@ export default function piHudExtension(pi: AnyPi) {
         const cwd = state.cwd || process.cwd();
         const git = await gitSource.get(cwd);
         // Snapshot after await in case ctx model fields changed while awaiting git
-        snapshotFromCtx(ctx);
+        await snapshotFromCtx(ctx);
         renderNow(ctx, git);
       } catch (err) {
         debugLog("refreshFooter error:", err);
@@ -215,10 +216,9 @@ export default function piHudExtension(pi: AnyPi) {
             costTotal: usage.costTotal,
             at: Date.now(),
           };
-          // If we still don't have a contextWindow, derive from totalTokens if it looks like a window marker
-          if (!state.contextWindow && usage.totalTokens) {
-            state.contextTokensUsed = usage.totalTokens;
-          }
+          // Note: usage.totalTokens is the per-message token total, not
+          // session-wide context usage. contextTokensUsed is populated
+          // exclusively by readContextUsage() in snapshotFromCtx().
         }
         scheduleRefresh(ctx);
       } catch (err) {
@@ -238,7 +238,7 @@ export default function piHudExtension(pi: AnyPi) {
             {
               toolCallId: String(id),
               name: String(name),
-              target: extractToolTarget(String(name), args),
+              target: extractToolTarget(args),
               status: "running",
               startedAt: Date.now(),
             },
@@ -249,13 +249,10 @@ export default function piHudExtension(pi: AnyPi) {
         if (String(name).toLowerCase() === "read" && args) {
           const path = (args as Record<string, unknown>)?.file_path ?? (args as Record<string, unknown>)?.path;
           if (typeof path === "string" && /SKILL\.md$/i.test(path)) {
-            // Best-effort: derive skill name from path (parent directory basename)
-            const match = path.match(/\/skills\/([^/]+)\//i);
-            if (match) recordSkill(state, match[1]);
-            else if (/([^/]+)\/SKILL\.md$/i.test(path)) {
-              const m = path.match(/([^/]+)\/SKILL\.md$/i);
-              if (m) recordSkill(state, m[1]);
-            }
+            // Best-effort: derive skill name from path (parent directory basename).
+            // Prefer the /skills/<name>/ form; fall back to the immediate parent dir.
+            const m = path.match(/\/skills\/([^/]+)\//i) ?? path.match(/([^/]+)\/SKILL\.md$/i);
+            if (m) recordSkill(state, m[1]);
           }
         }
         gitSource.invalidate(); // file may have been modified

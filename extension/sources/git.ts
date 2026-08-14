@@ -76,6 +76,10 @@ function parseStatus(out: string): { branch: string | null; dirty: boolean; ahea
 
 export function createGitSource(exec: ExecFn) {
   let cache: CacheEntry | null = null;
+  // In-flight promise: dedups concurrent refresh() calls so we never spawn
+  // more than one `git status` subprocess for a burst of events. Satisfies
+  // the "at most once per second" invariant in CLAUDE.md #6.
+  let pending: Promise<GitState> | null = null;
 
   async function refresh(cwd: string): Promise<GitState> {
     const gitDir = findGitDir(cwd);
@@ -89,12 +93,21 @@ export function createGitSource(exec: ExecFn) {
       const result = await exec("git", ["-C", gitDir, "status", "-b", "--porcelain=v1"], {
         timeout: EXEC_TIMEOUT_MS,
       });
-      if (result.code !== 0) {
+      // Defensive reflection: pi.exec's return shape may shift across versions
+      // (code | exitCode | status). Match the pattern used in sources/context.ts.
+      const r = result as unknown as Record<string, unknown>;
+      const code =
+        typeof r.code === "number" ? r.code :
+        typeof r.exitCode === "number" ? r.exitCode :
+        typeof r.status === "number" ? r.status :
+        0;
+      const stdout = typeof r.stdout === "string" ? r.stdout : "";
+      if (code !== 0) {
         // git error (e.g. corrupt repo): treat as non-repo
         cache = { state: { ...NON_REPO, isRepo: true }, at: Date.now() };
         return cache.state;
       }
-      const parsed = parseStatus(result.stdout);
+      const parsed = parseStatus(stdout);
       const state: GitState = {
         branch: parsed.branch,
         dirty: parsed.dirty,
@@ -118,9 +131,14 @@ export function createGitSource(exec: ExecFn) {
       if (cache && now - cache.at < MIN_INTERVAL_MS) {
         return cache.state;
       }
-      return refresh(cwd);
+      // Coalesce concurrent callers onto a single in-flight refresh.
+      if (pending) return pending;
+      pending = refresh(cwd).finally(() => { pending = null; });
+      return pending;
     },
-    // Force-invalidate cache (e.g. after a tool that likely modified files)
+    // Force-invalidate cache (e.g. after a tool that likely modified files).
+    // Does NOT cancel an in-flight refresh — that would just cause the next
+    // get() to spawn another subprocess.
     invalidate(): void {
       cache = null;
     },

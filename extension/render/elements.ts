@@ -131,15 +131,12 @@ export function renderTools(state: HudState, cfg: HudConfig): string | undefined
   return segments.length > 0 ? segments.join(" | ") : undefined;
 }
 
-function renderToolEntry(t: ToolEntry, cfg: HudConfig, count?: number): string {
+function renderToolEntry(t: ToolEntry, cfg: HudConfig): string {
   const glyph = t.status === "running" ? SYMBOLS.running : t.status === "error" ? SYMBOLS.error : SYMBOLS.completed;
   const color = t.status === "running" ? "yellow" : t.status === "error" ? "red" : "green";
   let label = t.name;
   if (t.target) {
     label += ": " + truncate(t.target, cfg.display.toolNameMaxLength);
-  }
-  if (count && count > 1) {
-    label += " ×" + count;
   }
   return colorize(color, glyph + " " + label);
 }
